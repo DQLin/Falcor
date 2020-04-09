@@ -32,7 +32,7 @@
 #include <windows.h>
 
 static const glm::vec4 kClearColor(0.38f, 0.52f, 0.10f, 1);
-static const std::string kDefaultScene = "framerib_sim_13.ccp";
+static const std::string kDefaultScene = "framerib_sim_40.ccp";
 
 std::string to_string(const vec3& v)
 {
