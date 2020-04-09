@@ -506,8 +506,9 @@ namespace Falcor
         }
 
         // If a transform in the scene changed, update BLASes with skinned meshes
-        if (mBlasData.size() && mHasSkinnedMesh && is_set(mUpdates, UpdateFlags::SceneGraphChanged))
+        if (mHasCurveDisplayWidthChanged || (mBlasData.size() && mHasSkinnedMesh && is_set(mUpdates, UpdateFlags::SceneGraphChanged)))
         {
+            mHasCurveDisplayWidthChanged = false;
             mTlasCache.clear();
             buildBlas(pContext);
         }
@@ -845,7 +846,7 @@ namespace Falcor
             }
         }
 
-        mpCurvePatchAABBBuffer = Buffer::create(aabbs.size() * sizeof(D3D12_RAYTRACING_AABB), vbBindFlags, Buffer::CpuAccess::Write, aabbs.data());
+        mpCurvePatchAABBBuffer = Buffer::create(aabbs.size() * sizeof(D3D12_RAYTRACING_AABB), vbBindFlags, Buffer::CpuAccess::None, aabbs.data());
 
         mCurveBlasData[0].geomDescs.resize((uint32_t)mCurveDesc.size());
 
@@ -993,7 +994,8 @@ namespace Falcor
             // Insert a UAV barrier
             pContext->uavBarrier(blas.pBlas.get());
 
-            blas.pScratchBuffer.reset(); // Release 
+            // blas.pScratchBuffer.reset(); // Release
+            blas.updateMode = mBlasUpdateMode;
         }
 
         updateAsToInstanceDataMapping();

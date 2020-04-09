@@ -42,6 +42,7 @@ public:
 
 private:
     Scene::SharedPtr mpScene;
+    SceneBuilder::SharedPtr mpSceneBuilder;
 
     RtProgram::SharedPtr mpRaytraceProgram = nullptr;
     Camera::SharedPtr mpCamera;
@@ -53,6 +54,14 @@ private:
     Texture::SharedPtr mpRtOut;
 
     uint32_t mSampleIndex = 0xdeadbeef;
+
+    float mCurveDisplayWidthMultipler = 1.f;
+	float mLastCurveDisplayWidthMultipler = 1.f;
+
+    int mCurveMaxSubdivisionDepth = 2;
+    int mLastCurveMaxSubdivisionDepth = 2;
+
+    bool mbAdaptiveSubdivDepth = false;
 
     void setPerFrameVars(const Fbo* pTargetFbo);
     void renderRT(RenderContext* pContext, const Fbo* pTargetFbo);

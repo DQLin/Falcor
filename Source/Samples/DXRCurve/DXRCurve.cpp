@@ -60,14 +60,18 @@ void DXRCurve::onGuiRender(Gui* pGui)
     debugViews.push_back({ 2, "Curve tangent" });
     w.dropdown("Debug View", debugViews, mDebugViewId);
 
+    w.var("Curve Display Width", mCurveDisplayWidthMultipler, 0.1f, 10.f, 0.1f);
+    w.var("Curve Subdiv Depth", mCurveMaxSubdivisionDepth, 1, 10, 1);
+    w.checkbox("Adaptive Subdiv", mbAdaptiveSubdivDepth);
+
     mpScene->renderUI(w);
 }
 
 void DXRCurve::loadBSplineCurveFromCCP(const std::string& filename, const Fbo* pTargetFbo)
 {
-    SceneBuilder::SharedPtr pBuilder = SceneBuilder::create("");
-    pBuilder->loadKnitCCPFile(filename, 10.f);
-    mpScene = pBuilder->getScene();
+    mpSceneBuilder = SceneBuilder::create("");
+    mpSceneBuilder->loadKnitCCPFile(filename, 10.f);
+    mpScene = mpSceneBuilder->getScene();
     mpScene->setCameraController(Scene::CameraControllerType::Orbiter);
     if (!mpScene) return;
 
@@ -89,6 +93,7 @@ void DXRCurve::loadBSplineCurveFromCCP(const std::string& filename, const Fbo* p
     rtProgDesc.setMaxTraceRecursionDepth(1); 
 
     mpRaytraceProgram = RtProgram::create(rtProgDesc);
+    mpRaytraceProgram->addDefine("MaxCurveSubdivDepth", std::to_string(mCurveMaxSubdivisionDepth));
     mpRtVars = RtProgramVars::create(mpRaytraceProgram, mpScene);
     mpRaytraceProgram->setScene(mpScene);
 }
@@ -109,6 +114,8 @@ void DXRCurve::setPerFrameVars(const Fbo* pTargetFbo)
     auto cb = mpRtVars["PerFrameCB"];
     cb["viewportInvDims"] = vec2(1.f / pTargetFbo->getWidth(), 1.f / pTargetFbo->getHeight());
     cb["debugViewId"] = mDebugViewId;
+    cb["displayWidthMultipler"] = mCurveDisplayWidthMultipler;
+    cb["adaptiveSubdivDepth"] = mbAdaptiveSubdivDepth;
     mpRtVars->getRootVar()["gOutput"] = mpRtOut;
 }
 
@@ -128,6 +135,18 @@ void DXRCurve::onFrameRender(RenderContext* pRenderContext, const Fbo::SharedPtr
 
     if (mpScene)
     {
+        if (mCurveDisplayWidthMultipler != mLastCurveDisplayWidthMultipler)
+        {
+            mLastCurveDisplayWidthMultipler = mCurveDisplayWidthMultipler;
+            mpSceneBuilder->updateCurveDisplayWidth(mpScene, mCurveDisplayWidthMultipler);
+        }
+
+        if (mCurveMaxSubdivisionDepth != mLastCurveMaxSubdivisionDepth)
+        {
+            mLastCurveMaxSubdivisionDepth = mCurveMaxSubdivisionDepth;
+            mpRaytraceProgram->addDefine("MaxCurveSubdivDepth", std::to_string(mCurveMaxSubdivisionDepth));
+        }
+        
         mpScene->update(pRenderContext, gpFramework->getGlobalClock().now());
         renderRT(pRenderContext, pTargetFbo.get());
     }

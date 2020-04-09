@@ -171,6 +171,8 @@ namespace Falcor
 
         void loadKnitCCPFile(const std::string& filename, float scale = 1.f, bool yz = true);
 
+        void updateCurveDisplayWidth(Scene::SharedPtr pScene, float displayWidth);
+
     private:
         struct InternalNode : Node
         {
@@ -233,6 +235,8 @@ namespace Falcor
 
         CurveList mCurves;
         CurveData mCurveData;
+
+        float mCurveDisplayWidthMultiplier = 1.f;
 
         Scene::AnimatedObject<Camera> mCamera;
         std::vector<Scene::AnimatedObject<Light>> mLights;

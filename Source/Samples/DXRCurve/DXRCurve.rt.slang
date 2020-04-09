@@ -31,12 +31,16 @@ import Utils.Math.MathHelpers;
 
 RWTexture2D<float4> gOutput;
 
-static const int MaxCurveSubdivDepth = 2;
+#ifndef MaxCurveSubdivDepth
+#error "MaxCurveSubdivDepth not defined!"
+#endif
 
 cbuffer PerFrameCB : register(b0)
 {
     float2 viewportInvDims;
     int debugViewId;
+    float displayWidthMultipler;
+    bool adaptiveSubdivDepth;
 };
 
 /** Ray differentials for primary hit. Code from RayTracingGems, Chapter 20.
@@ -124,13 +128,6 @@ void rayCurveIntersectionInCurveAABB(uniform HitShaderParams hitParams)
     float TMin = RayTMin();
     float TMax = 1e10;
 
-    //CurveIntersectionAttributes attr;      
-    //attr.u = 1;
-    //attr.v = 1;
-    //attr.dpdu = 1;
-    //ReportHit(TCurrent, 0, attr);
-    //return;
-
     const uint curveInstanceID = hitParams.geometryIndex;
     const uint patchIndex = PrimitiveIndex();
     PatchVertexData patch = gScene.getCurveVertexData(curveInstanceID, patchIndex);
@@ -149,7 +146,7 @@ void rayCurveIntersectionInCurveAABB(uniform HitShaderParams hitParams)
                     mul(float4(patch.position[2].xyz,1), worldToRaySpaceMatrix).xyz,
                     mul(float4(patch.position[3].xyz,1), worldToRaySpaceMatrix).xyz };
 
-    float maxWidth = max(max(patch.position[0].w, patch.position[1].w), max(patch.position[2].w, patch.position[3].w));
+    float maxWidth = displayWidthMultipler * max(max(patch.position[0].w, patch.position[1].w), max(patch.position[2].w, patch.position[3].w));
 
     float rayLength = length(rayDir);
     float zMax = rayLength * TMax;
@@ -168,31 +165,28 @@ void rayCurveIntersectionInCurveAABB(uniform HitShaderParams hitParams)
             )
         return;
 
-    // CurveIntersectionAttributes attr;      
-    // attr.u = maxWidth;
-    // attr.v = maxWidth;
-    // attr.dpdu = cp[0];
-    // ReportHit(length(patch.position[0].xyz - rayOrigin) / length(rayDir), 0, attr);
-    // return;
-
 		// compute refinement depth
 
-    float L0 = 0;
-    for (int i = 0; i < 2; ++i)
-        L0 = max(
-            L0, max(
-                max(abs(cp[i].x - 2 * cp[i + 1].x + cp[i + 2].x),
-                    abs(cp[i].y - 2 * cp[i + 1].y + cp[i + 2].y)),
-                abs(cp[i].z - 2 * cp[i + 1].z + cp[i + 2].z)));
 
-    float eps = maxWidth * .05f;  // width / 20 (TODO: set parameter for precision)
+    // fixed subdivision level
+    int maxDepth = MaxCurveSubdivDepth;
 
-    // Compute log base 4 by dividing log2 in half.
-    int r0 = Log2(1.41421356237f * 6.f * L0 / (8.f * eps)) / 2;
-    int maxDepth = clamp(r0, 0, MaxCurveSubdivDepth);
+    if (adaptiveSubdivDepth)
+    {
+        float L0 = 0;
+        for (int i = 0; i < 2; ++i)
+            L0 = max(
+                L0, max(
+                    max(abs(cp[i].x - 2 * cp[i + 1].x + cp[i + 2].x),
+                        abs(cp[i].y - 2 * cp[i + 1].y + cp[i + 2].y)),
+                    abs(cp[i].z - 2 * cp[i + 1].z + cp[i + 2].z)));
 
-    // fix subdivision level
-    // int maxDepth = 4;
+        float eps = maxWidth * .05f;  // width / 20 (TODO: set parameter for precision)
+
+        // Compute log base 4 by dividing log2 in half.
+        int r0 = Log2(1.41421356237f * 6.f * L0 / (8.f * eps)) / 2;
+        maxDepth = clamp(r0, 0, MaxCurveSubdivDepth);
+    }
 
     float u0[MaxCurveSubdivDepth];
     float u1[MaxCurveSubdivDepth];
@@ -211,9 +205,9 @@ void rayCurveIntersectionInCurveAABB(uniform HitShaderParams hitParams)
     float vHit;
     float3 dpduHit;
 
-    while (depth <= MaxCurveSubdivDepth)
+    while (depth <= maxDepth)
     {
-        if (depth >= MaxCurveSubdivDepth)
+        if (depth >= maxDepth)
         {
             cpSub[0] = BlossomBezier(cp, ulo, ulo, ulo);
             cpSub[1] = BlossomBezier(cp, ulo, ulo, uhi);

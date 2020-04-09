@@ -504,11 +504,64 @@ namespace Falcor
                     boxMax = glm::max(boxMax, float3(mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position));
                     maxWidth = max(maxWidth, mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position.w);
                 }
+                maxWidth *= mCurveDisplayWidthMultiplier;
                 // extend with width
                 BoundingBox aabb = BoundingBox::fromMinMax(boxMin - 0.5f * maxWidth, boxMax + 0.5f * maxWidth);
                 pScene->mCurvePatchBBs.push_back(aabb);
             }
         }
+    }
+
+    void SceneBuilder::updateCurveDisplayWidth(Scene::SharedPtr pScene, float displayWidth)
+    {
+        // Calculate curve patch bounding boxes
+        mCurveDisplayWidthMultiplier = displayWidth;
+        int count = 0;
+        for (uint32_t i = 0; i < (uint32_t)mCurves.size(); i++)
+        {
+            const auto& curve = mCurves[i];
+
+            int numPatches = curve.vertexCount / 4;
+            for (int patch = 0; patch < numPatches; patch++)
+            {
+                vec3 boxMin(FLT_MAX);
+                vec3 boxMax(-FLT_MAX);
+                float maxWidth = 0;
+                for (int v = 0; v < 4; v++)
+                {
+                    boxMin = glm::min(boxMin, float3(mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position));
+                    boxMax = glm::max(boxMax, float3(mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position));
+                    maxWidth = max(maxWidth, mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position.w);
+                }
+                maxWidth *= mCurveDisplayWidthMultiplier;
+                // extend with width
+                pScene->mCurvePatchBBs[count++] = BoundingBox::fromMinMax(boxMin - 0.5f * maxWidth, boxMax + 0.5f * maxWidth);
+            }
+        }
+        pScene->updateBounds();
+
+        int globalPatchId = 0;
+        std::vector<D3D12_RAYTRACING_AABB> aabbs;
+        for (uint32_t curveId = 0; curveId < (uint32_t)pScene->mCurveDesc.size(); curveId++)
+        {
+            int numPatches = pScene->mCurveDesc[curveId].vertexCount / 4;
+            // fill CPU AABB array
+            for (uint32_t patchId = 0; patchId < (uint32_t)numPatches; patchId++)
+            {
+                D3D12_RAYTRACING_AABB aabb;
+                aabb.MinX = pScene->mCurvePatchBBs[globalPatchId].getMinPos().x;
+                aabb.MinY = pScene->mCurvePatchBBs[globalPatchId].getMinPos().y;
+                aabb.MinZ = pScene->mCurvePatchBBs[globalPatchId].getMinPos().z;
+                aabb.MaxX = pScene->mCurvePatchBBs[globalPatchId].getMaxPos().x;
+                aabb.MaxY = pScene->mCurvePatchBBs[globalPatchId].getMaxPos().y;
+                aabb.MaxZ = pScene->mCurvePatchBBs[globalPatchId].getMaxPos().z;
+                aabbs.push_back(aabb);
+                globalPatchId++;
+            }
+        }
+
+        pScene->mpCurvePatchAABBBuffer->setBlob(aabbs.data(), 0, sizeof(D3D12_RAYTRACING_AABB) * aabbs.size());
+        pScene->mHasCurveDisplayWidthChanged = true;
     }
 
     size_t SceneBuilder::addAnimation(size_t meshID, Animation::ConstSharedPtrRef pAnimation)
@@ -531,6 +584,7 @@ namespace Falcor
         }
     }
 
+    // using a default width of 1
     void SceneBuilder::GenerateBezierPatchesFromKnitData(const std::vector<std::vector<vec3>>& knitData)
     {
         for (int yarnId = 0; yarnId < knitData.size(); yarnId++)
@@ -697,7 +751,6 @@ namespace Falcor
 
         GenerateBezierPatchesFromKnitData(knit_data);
     }
-
 
     SCRIPT_BINDING(SceneBuilder)
     {

@@ -497,6 +497,7 @@ namespace Falcor
 
         // auxiliary
         Buffer::SharedPtr mpCurvePatchAABBBuffer;
+        bool mHasCurveDisplayWidthChanged = false;
 
         // Camera
         CameraControllerType mCamCtrlType = CameraControllerType::FirstPerson;
