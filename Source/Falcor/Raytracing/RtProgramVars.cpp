@@ -112,6 +112,16 @@ namespace Falcor
         mHitVars.resize(totalHitBlockCount);
         mDescHitGroupCount = descHitGroupCount;
 
+        // curve hit groups
+        uint32_t descCurveHitGroupCount = uint32_t(descExtra.mCurveHitGroups.size());
+        uint32_t blockCountPerCurveHitGroup = mpScene->getCurveCount();
+
+        uint32_t totalCurveHitBlockCount = descCurveHitGroupCount * blockCountPerCurveHitGroup;
+
+        mCurveHitVars.resize(totalCurveHitBlockCount);
+        mDescCurveHitGroupCount = descCurveHitGroupCount;
+
+
         for(uint32_t i = 0; i < rayGenProgCount; ++i)
         {
             auto& info = descExtra.mRayGenEntryPoints[i];
@@ -131,6 +141,17 @@ namespace Falcor
             }
         }
 
+        for (uint32_t i = 0; i < descCurveHitGroupCount; ++i)
+        {
+            auto& info = descExtra.mCurveHitGroups[i];
+            if (info.groupIndex < 0) continue;
+
+            for (uint32_t j = 0; j < blockCountPerCurveHitGroup; ++j)
+            {
+                mCurveHitVars[j * descCurveHitGroupCount + i].pVars = EntryPointGroupVars::create(pReflector->getEntryPointGroup(info.groupIndex), info.groupIndex);
+            }
+        }
+
         for(uint32_t i = 0; i < missProgCount; ++i)
         {
             auto& info = descExtra.mMissEntryPoints[i];
@@ -142,6 +163,8 @@ namespace Falcor
         for(auto entryPointGroupInfo : mRayGenVars)
             mpEntryPointGroupVars.push_back(entryPointGroupInfo.pVars);
         for(auto entryPointGroupInfo : mHitVars)
+            mpEntryPointGroupVars.push_back(entryPointGroupInfo.pVars);
+        for (auto entryPointGroupInfo : mCurveHitVars)
             mpEntryPointGroupVars.push_back(entryPointGroupInfo.pVars);
         for(auto entryPointGroupInfo : mMissVars)
             mpEntryPointGroupVars.push_back(entryPointGroupInfo.pVars);
@@ -252,7 +275,6 @@ namespace Falcor
                 varsInfo.lastObservedChangeEpoch = getEpochOfLastChange(pBlock);
             }
 
-
             // Loop over the rays
             uint32_t hitCount = getTotalHitVarsCount();
             for (uint32_t h = 0; h < hitCount; h++)
@@ -266,6 +288,26 @@ namespace Falcor
                 if(!pGroupKernels) { continue; }
 
                 uint8_t* pRecord = mpShaderTable->getRecordPtr(ShaderTable::SubTableType::Hit, h);
+
+                if (!applyRtProgramVars(pRecord, pGroupKernels, uniqueGroupIndex, pRtso, pBlock, mpRtVarsHelper.get()))
+                {
+                    return false;
+                }
+                varsInfo.lastObservedChangeEpoch = getEpochOfLastChange(pBlock);
+            }
+
+            uint32_t curveHitCount = getTotalCurveHitVarsCount();
+            for (uint32_t h = 0; h < curveHitCount; h++)
+            {
+                auto& varsInfo = mCurveHitVars[h];
+                auto pBlock = varsInfo.pVars.get();
+
+                auto uniqueGroupIndex = pBlock->getGroupIndexInProgram();
+
+                auto pGroupKernels = getUniqueRtEntryPointGroupKernels(pKernels, uniqueGroupIndex);
+                if (!pGroupKernels) { continue; }
+
+                uint8_t* pRecord = mpShaderTable->getRecordPtr(ShaderTable::SubTableType::Hit, hitCount + h);
 
                 if (!applyRtProgramVars(pRecord, pGroupKernels, uniqueGroupIndex, pRtso, pBlock, mpRtVarsHelper.get()))
                 {

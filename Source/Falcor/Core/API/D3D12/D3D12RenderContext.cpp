@@ -399,7 +399,7 @@ namespace Falcor
         }
 
         // Hit data
-        if (pProgram->getHitProgramCount() > 0)
+        if (pProgram->getHitProgramCount() > 0 || pProgram->getCurveHitProgramCount() > 0)
         {
             raytraceDesc.HitGroupTable.StartAddress = startAddress + pShaderTable->getHitTableOffset();
             raytraceDesc.HitGroupTable.StrideInBytes = pShaderTable->getHitRecordSize();

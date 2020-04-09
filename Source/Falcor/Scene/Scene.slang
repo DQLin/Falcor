@@ -44,6 +44,12 @@ struct LocalMesh
     uint materialID;
 };
 
+struct PatchVertexData
+{
+    float4 position[4];
+    // TODO: add normal if necessary
+};
+
 #ifndef MATERIAL_COUNT
 // This error occurs when a shader imports Scene.slang without setting the defines
 // returned by Scene::getSceneDefines().
@@ -56,6 +62,7 @@ struct Scene
 {
     StructuredBuffer<MeshInstanceData> meshInstances;
     StructuredBuffer<MeshDesc> meshes;
+    StructuredBuffer<CurveDesc> curves;
     StructuredBuffer<MaterialData> materials;
     StructuredBuffer<LightData> lights;
 
@@ -70,6 +77,8 @@ struct Scene
 
     StructuredBuffer<StaticVertexData> vertices;
     ByteAddressBuffer indices;
+
+    StructuredBuffer<CurveVertexData> curveVertices;
 
     float4x4 getWorldMatrix(uint meshInstanceID)
     {
@@ -129,6 +138,11 @@ struct Scene
         return meshes[meshInstances[meshInstanceID].meshID];
     }
 
+    CurveDesc getCurveDesc(uint curveInstanceID)
+    {
+        return curves[curveInstanceID];
+    }
+
     uint getLightCount()
     {
         uint count, stride;
@@ -160,6 +174,12 @@ struct Scene
         uint3 vtxIndices = indices.Load3(baseIndex * 4);
         vtxIndices += getMeshDesc(meshInstanceID).vbOffset;
         return vtxIndices;
+    }
+
+    uint4 getCurveIndices(uint curveInstanceID, uint patchIndex)
+    {
+        uint baseIndex = getCurveDesc(curveInstanceID).vbOffset + 4 * patchIndex;
+        return uint4(baseIndex, baseIndex + 1, baseIndex + 2, baseIndex + 3);
     }
 
     /** Returns a triangle's face normal in object space.
@@ -299,6 +319,20 @@ struct Scene
         v.faceNormalW = normalize(v.faceNormalW);
         // Handle invalid bitangents gracefully (avoid NaN from normalization).
         v.bitangentW = dot(v.bitangentW, v.bitangentW) > 0.f ? normalize(v.bitangentW) : float3(0, 0, 0);
+
+        return v;
+    }
+
+    PatchVertexData getCurveVertexData(uint curveInstanceID, uint patchIndex)
+    {
+        const uint4 vtxIndices = getCurveIndices(curveInstanceID, patchIndex);
+        PatchVertexData v = {};
+
+        [unroll]
+        for (int i = 0; i < 4; i++)
+        {
+            v.position[i] = curveVertices[vtxIndices[i]].position;
+        }
 
         return v;
     }

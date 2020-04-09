@@ -30,6 +30,8 @@
 #include "../Externals/mikktspace/mikktspace.h"
 #include <filesystem>
 
+#define AUTOMATIC_YARN_SEGMENTATION
+
 namespace Falcor
 {
     namespace
@@ -124,7 +126,7 @@ namespace Falcor
     SceneBuilder::SharedPtr SceneBuilder::create(const std::string& filename, Flags buildFlags, const InstanceMatrices& instances)
     {
         auto pBuilder = create(buildFlags);
-        return pBuilder->import(filename, instances) ? pBuilder : nullptr;
+        return pBuilder->import(filename == "" ? "default.obj" : filename, instances) ? pBuilder : nullptr;
     }
 
     bool SceneBuilder::import(const std::string& filename, const InstanceMatrices& instances)
@@ -406,6 +408,26 @@ namespace Falcor
         return (uint32_t)drawCount;
     }
 
+    uint32_t SceneBuilder::createCurveData(Scene* pScene)
+    {
+        auto& curveDesc = pScene->mCurveDesc;
+        curveDesc.resize(mCurves.size());
+
+        size_t drawCount = 0;
+        for (uint32_t curveID = 0; curveID < mCurves.size(); curveID++)
+        {
+            // Mesh data
+            const auto& curve = mCurves[curveID];
+            curveDesc[curveID].materialID = curve.materialId;
+            curveDesc[curveID].vbOffset = curve.vertexOffset;
+            curveDesc[curveID].vertexCount = curve.vertexCount;
+
+            drawCount++;
+        }
+        assert(drawCount <= UINT32_MAX);
+        return (uint32_t)drawCount;
+    }
+
     Scene::SharedPtr SceneBuilder::getScene()
     {
         // We cache the scene because creating it is not cheap.
@@ -431,7 +453,10 @@ namespace Falcor
         createGlobalMatricesBuffer(mpScene.get());
         uint32_t drawCount = createMeshData(mpScene.get());
         mpScene->mpVao = createVao(drawCount);
+        mpScene->mCPUCurveVertexBuffer = mCurveData.staticData;
+        createCurveData(mpScene.get());
         calculateMeshBoundingBoxes(mpScene.get());
+        calculateCurvePatchBoundingBoxes(mpScene.get());
         createAnimationController(mpScene.get());
         mpScene->finalize();
         mDirty = false;
@@ -460,6 +485,32 @@ namespace Falcor
         }
     }
 
+    void SceneBuilder::calculateCurvePatchBoundingBoxes(Scene* pScene)
+    {
+        // Calculate curve patch bounding boxes
+        for (uint32_t i = 0; i < (uint32_t)mCurves.size(); i++)
+        {
+            const auto& curve = mCurves[i];
+
+            int numPatches = curve.vertexCount / 4;
+            for (int patch = 0; patch < numPatches; patch++)
+            {
+                vec3 boxMin(FLT_MAX);
+                vec3 boxMax(-FLT_MAX);
+                float maxWidth = 0;
+                for (int v = 0; v < 4; v++)
+                {
+                    boxMin = glm::min(boxMin, float3(mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position));
+                    boxMax = glm::max(boxMax, float3(mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position));
+                    maxWidth = max(maxWidth, mCurveData.staticData[curve.vertexOffset + 4 * patch + v].position.w);
+                }
+                // extend with width
+                BoundingBox aabb = BoundingBox::fromMinMax(boxMin - 0.5f * maxWidth, boxMax + 0.5f * maxWidth);
+                pScene->mCurvePatchBBs.push_back(aabb);
+            }
+        }
+    }
+
     size_t SceneBuilder::addAnimation(size_t meshID, Animation::ConstSharedPtrRef pAnimation)
     {
         assert(meshID < mMeshes.size());
@@ -479,6 +530,174 @@ namespace Falcor
             }
         }
     }
+
+    void SceneBuilder::GenerateBezierPatchesFromKnitData(const std::vector<std::vector<vec3>>& knitData)
+    {
+        for (int yarnId = 0; yarnId < knitData.size(); yarnId++)
+        {
+            int curveId = (int)mCurves.size();
+            CurveSpec spec;
+            spec.topology = Vao::Topology::LineStrip;
+            spec.vertexOffset = (uint32_t)mCurveData.staticData.size();
+            const std::vector<vec3>& yarn = knitData[yarnId];
+            int yarnSize = (int)yarn.size();
+            spec.vertexCount = (yarnSize - 3) * 4; // there are yarnSize bezier patches, each with 4 vertices (TODO: remove redundant vertex storage)
+            // TODO: assign curve material
+            spec.materialId = -1;
+            mCurves.push_back(spec);
+
+            vec3 lastPoint = vec3(0);
+            for (int i = 3; i < yarnSize; i++)
+            {
+                // convert B-spline patches to bezier patches
+                const int i0 = min(max(0, i - 3), int(yarnSize - 1));
+                const int i1 = min(max(0, i - 2), int(yarnSize - 1));
+                const int i2 = min(max(0, i - 1), int(yarnSize - 1));
+                const int i3 = min(max(0, i + 0), int(yarnSize - 1));
+
+                float3 p012 = yarn[i0];
+                float3 p123 = yarn[i1];
+                float3 p234 = yarn[i2];
+                float3 p345 = yarn[i3];
+
+                float3 p122 = lerp(p012, p123, float3(2.f / 3.f));
+                float3 p223 = lerp(p123, p234, float3(1.f / 3.f));
+                float3 p233 = lerp(p123, p234, float3(2.f / 3.f));
+                float3 p334 = lerp(p234, p345, float3(1.f / 3.f));
+
+                float3 p222 = lerp(p122, p223, float3(0.5f));
+                float3 p333 = lerp(p233, p334, float3(0.5f));
+
+                CurveVertexData vertexData[4];
+
+                vertexData[0].position = float4(p222, 1);
+                vertexData[1].position = float4(p223, 1);
+                vertexData[2].position = float4(p233, 1);
+                vertexData[3].position = float4(p333, 1);
+
+                mCurveData.staticData.push_back(vertexData[0]);
+                mCurveData.staticData.push_back(vertexData[1]);
+                mCurveData.staticData.push_back(vertexData[2]);
+                mCurveData.staticData.push_back(vertexData[3]);
+            }
+        }
+    }
+
+    void SceneBuilder::loadKnitCCPFile(const std::string& filename, float scale, bool yz)
+    {
+        using KnitData = std::vector<std::vector<vec3>>;
+        KnitData	knit_data;
+
+        std::string filefullpath;
+        findFileInDataDirectories(filename, filefullpath);
+
+        FILE* fp = fopen(filefullpath.c_str(), "r");
+        if (!fp) return;
+
+        std::vector<vec3>	yarn_rnd_pts;
+
+        class Buffer
+        {
+            char data[1024];
+            int readLine;
+        public:
+            int ReadLine(FILE* fp)
+            {
+                char c = fgetc(fp);
+                while (!feof(fp)) {
+                    while (isspace(c) && (!feof(fp) || c != '\0')) c = fgetc(fp);	// skip empty space
+                    if (c == '#') while (!feof(fp) && c != '\n' && c != '\r' && c != '\0') c = fgetc(fp);	// skip comment line
+                    else break;
+                }
+                int i = 0;
+                bool inspace = false;
+                while (i < 1024 - 1) {
+                    if (feof(fp) || c == '\n' || c == '\r' || c == '\0') break;
+                    if (isspace(c)) {	// only use a single space as the space character
+                        inspace = true;
+                    }
+                    else {
+                        if (inspace) data[i++] = ' ';
+                        inspace = false;
+                        data[i++] = c;
+                    }
+                    c = fgetc(fp);
+                }
+                data[i] = '\0';
+                readLine = i;
+                return i;
+            }
+            char& operator[](int i) { return data[i]; }
+            void ReadVertex(vec3& v) const { sscanf(data + 2, "%f %f %f", &v.x, &v.y, &v.z); }
+            void ReadVertexYZ(vec3& v) const { sscanf(data + 2, "%f %f %f", &v.x, &v.z, &v.y); }
+            void ReadFloat3(float f[3]) const { sscanf(data + 2, "%f %f %f", &f[0], &f[1], &f[2]); }
+            void ReadFloat(float* f) const { sscanf(data + 2, "%f", f); }
+            void ReadInt(int* i, int start) const { sscanf(data + start, "%d", i); }
+            bool IsCommand(const char* cmd) const {
+                int i = 0;
+                while (cmd[i] != '\0') {
+                    if (cmd[i] != data[i]) return false;
+                    i++;
+                }
+                return (data[i] == '\0' || data[i] == ' ');
+            }
+            void Copy(char* a, int count, int start = 0) const {
+                strncpy(a, data + start, count - 1);
+                a[count - 1] = '\0';
+            }
+        };
+        Buffer buffer;
+
+        yarn_rnd_pts.clear();
+
+        vec3 p;
+        while (buffer.ReadLine(fp)) {
+            if (buffer.IsCommand("v")) {
+                if (yz) buffer.ReadVertex(p);
+                else	buffer.ReadVertexYZ(p);
+            }
+
+            yarn_rnd_pts.push_back(p * scale);
+            if (feof(fp)) break;
+        }
+
+        knit_data.clear();
+        std::vector<vec3> yarn;
+        const int subSegNum = 11;
+        for (int i = 0; i < (int)yarn_rnd_pts.size() - 3; i++) {
+
+            float localLength = 0.0;
+            for (int j = 0; j < subSegNum - 1; j++) {
+                float t0 = j / float(subSegNum - 1);
+                float t1 = (j + 1) / float(subSegNum - 1);
+                const vec3 p0 = pow(1 - t0, 3) * yarn_rnd_pts[i + 0] + 3 * pow(1 - t0, 2) * t0 * yarn_rnd_pts[i + 1] + 3 * pow(t0, 2) * (1 - t0) * yarn_rnd_pts[i + 2] + pow(t0, 3) * yarn_rnd_pts[i + 3];
+                const vec3 p1 = pow(1 - t1, 3) * yarn_rnd_pts[i + 0] + 3 * pow(1 - t1, 2) * t1 * yarn_rnd_pts[i + 1] + 3 * pow(t1, 2) * (1 - t1) * yarn_rnd_pts[i + 2] + pow(t1, 3) * yarn_rnd_pts[i + 3];
+                const vec3 diff = p0 - p1;
+                localLength += length(diff);
+            }
+
+#ifdef AUTOMATIC_YARN_SEGMENTATION
+            if (localLength > 10.0f) {
+                if (yarn.size() > 3) knit_data.push_back(yarn);
+                yarn.clear();
+                continue;
+            }
+#endif
+
+            yarn.push_back(yarn_rnd_pts[i]);
+        }
+
+        if (!yarn.empty()) knit_data.push_back(yarn);
+
+        std::cout << "load " << knit_data.size() << " yarns\n";
+        for (int yi = 0; yi < knit_data.size(); yi++)
+            std::cout << "Yarn " << yi << " " << knit_data[yi].size() << std::endl;
+
+        fclose(fp);
+
+        GenerateBezierPatchesFromKnitData(knit_data);
+    }
+
 
     SCRIPT_BINDING(SceneBuilder)
     {

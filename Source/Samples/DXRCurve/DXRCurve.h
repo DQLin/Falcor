@@ -26,70 +26,35 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #pragma once
-#include "Utils/HostDeviceShared.slangh"
+#include "Falcor.h"
 
-BEGIN_NAMESPACE_FALCOR
+using namespace Falcor;
 
-struct MeshDesc
+class DXRCurve : public IRenderer
 {
-    uint vbOffset;
-    uint ibOffset;
-    uint vertexCount; // #SCENE This is probably only needed on the CPU
-    uint indexCount; // #SCENE This is probably only needed on the CPU
-    uint materialID;
-};
+public:
+    void onLoad(RenderContext* pRenderContext) override;
+    void onFrameRender(RenderContext* pRenderContext, const Fbo::SharedPtr& pTargetFbo) override;
+    void onResizeSwapChain(uint32_t width, uint32_t height) override;
+    bool onKeyEvent(const KeyboardEvent& keyEvent) override;
+    bool onMouseEvent(const MouseEvent& mouseEvent) override;
+    void onGuiRender(Gui* pGui) override;
 
-enum MeshInstanceFlags
-{
-    None = 0x0,
-    Flipped = 0x1
-};
+private:
+    Scene::SharedPtr mpScene;
 
-struct MeshInstanceData
-{
-    uint globalMatrixID;
-    uint materialID;
-    uint meshID;
-    uint flags; ///< MeshInstanceFlags
-};
+    RtProgram::SharedPtr mpRaytraceProgram = nullptr;
+    Camera::SharedPtr mpCamera;
 
-struct StaticVertexData
-{
-    float3 position;
-    float3 normal;
-    float3 bitangent;
-    float2 texCrd;
-    float3 prevPosition;
-};
+    bool mUseDOF = false;
+    uint32_t mDebugViewId = 2;
+    RtProgramVars::SharedPtr mpRtVars;
+    //RtSceneRenderer::SharedPtr mpRtRenderer;
+    Texture::SharedPtr mpRtOut;
 
-struct DynamicVertexData
-{
-    uint4 boneID;
-    float4 boneWeight;
-    uint staticIndex;   // The index in the static vertex buffer
-    uint globalMatrixID;
-};
+    uint32_t mSampleIndex = 0xdeadbeef;
 
-struct VertexData
-{
-    float3 posW;            ///< Position in world space.
-    float3 normalW;         ///< Shading normal in world space.
-    float3 bitangentW;      ///< Shading bitangent in world space.
-    float2 texC;            ///< Texture coordinate.
-    float3 faceNormalW;     ///< Face normal in world space.
+    void setPerFrameVars(const Fbo* pTargetFbo);
+    void renderRT(RenderContext* pContext, const Fbo* pTargetFbo);
+    void loadBSplineCurveFromCCP(const std::string& filename, const Fbo* pTargetFbo);
 };
-
-struct CurveDesc
-{
-	uint vbOffset;
-	uint vertexCount; // #SCENE This is probably only needed on the CPU
-	uint materialID;
-};
-
-struct CurveVertexData
-{
-	float4 position;
-	float4 normal;
-};
-
-END_NAMESPACE_FALCOR

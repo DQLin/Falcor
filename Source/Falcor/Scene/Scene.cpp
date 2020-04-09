@@ -43,9 +43,11 @@ namespace Falcor
 
         const std::string kParameterBlockName = "gScene";
         const std::string kMeshBufferName = "meshes";
+        const std::string kCurveBufferName = "curves";
         const std::string kMeshInstanceBufferName = "meshInstances";
         const std::string kIndexBufferName = "indices";
         const std::string kVertexBufferName = "vertices";
+        const std::string kCurveVertexBufferName = "curveVertices";
         const std::string kMaterialsBufferName = "materials";
         const std::string kLightsBufferName = "lights";
         const std::string kCameraVarName = "camera";
@@ -56,6 +58,12 @@ namespace Falcor
         const std::string kTarget = "target";
         const std::string kUp = "up";
     }
+
+    const FileDialogFilterVec Scene::kCurveFileExtensionFilters =
+    {
+        {"ccp"},
+        {"bcc"}
+    };
 
     const FileDialogFilterVec Scene::kFileExtensionFilters =
     {
@@ -100,7 +108,7 @@ namespace Falcor
     }
 
     Scene::SharedPtr Scene::create(const std::string& filename)
-    {
+    {        
         auto pBuilder = SceneBuilder::create(filename);
         return pBuilder ? pBuilder->getScene() : nullptr;
     }
@@ -156,7 +164,12 @@ namespace Falcor
     {
         PROFILE("raytraceScene");
 
-        auto rayTypeCount = pProgram->getHitProgramCount();
+        // if the scene contains both curve and meshes, then the number of curve hit programs and the number of
+        // (mesh) hit programs should both be equal to the number of ray types
+        assert(pProgram->getCurveHitProgramCount() == 0 || pProgram->getHitProgramCount() == 0 ||
+            pProgram->getCurveHitProgramCount() == pProgram->getHitProgramCount());
+
+        auto rayTypeCount = max(pProgram->getCurveHitProgramCount(), pProgram->getHitProgramCount());
         setRaytracingShaderData(pContext, pVars->getRootVar(), rayTypeCount);
 
         // If not set yet, set geometry indices for this RtProgramVars.
@@ -182,12 +195,18 @@ namespace Falcor
         mpSceneBlock = ParameterBlock::create(pReflection);
         mpMeshesBuffer = Buffer::createStructured(mpSceneBlock[kMeshBufferName], (uint32_t)mMeshDesc.size(), Resource::BindFlags::ShaderResource);
         mpMeshInstancesBuffer = Buffer::createStructured(mpSceneBlock[kMeshInstanceBufferName], (uint32_t)mMeshInstanceData.size(), Resource::BindFlags::ShaderResource);
+        if (!mCurveDesc.empty()) mpCurvesBuffer = Buffer::createStructured(mpSceneBlock[kCurveBufferName], (uint32_t)mCurveDesc.size(), Resource::BindFlags::ShaderResource);
 
         mpMaterialsBuffer = Buffer::createStructured(mpSceneBlock[kMaterialsBufferName], (uint32_t)mMaterials.size(), Resource::BindFlags::ShaderResource);
 
         if (mLights.size())
         {
             mpLightsBuffer = Buffer::createStructured(mpSceneBlock[kLightsBufferName], (uint32_t)mLights.size(), Resource::BindFlags::ShaderResource);
+        }
+
+        if (mCPUCurveVertexBuffer.size())
+        {
+            mpCurveVertexBuffer = Buffer::createStructured(mpSceneBlock[kCurveVertexBufferName], (uint32_t)mCPUCurveVertexBuffer.size(), Resource::BindFlags::ShaderResource);
         }
     }
 
@@ -197,13 +216,17 @@ namespace Falcor
         checkOffsets();
         mpMeshesBuffer->setBlob(mMeshDesc.data(), 0, sizeof(MeshDesc) * mMeshDesc.size());
         mpMeshInstancesBuffer->setBlob(mMeshInstanceData.data(), 0, sizeof(MeshInstanceData) * mMeshInstanceData.size());
+        if (!mCPUCurveVertexBuffer.empty())mpCurveVertexBuffer->setBlob(mCPUCurveVertexBuffer.data(), 0, sizeof(CurveVertexData) * mCPUCurveVertexBuffer.size());
+        if (!mCurveDesc.empty()) mpCurvesBuffer->setBlob(mCurveDesc.data(), 0, sizeof(CurveDesc) * mCurveDesc.size());
 
         mpSceneBlock->setBuffer(kMeshInstanceBufferName, mpMeshInstancesBuffer);
         mpSceneBlock->setBuffer(kMeshBufferName, mpMeshesBuffer);
+        mpSceneBlock->setBuffer(kCurveBufferName, mpCurvesBuffer);
         mpSceneBlock->setBuffer(kLightsBufferName, mpLightsBuffer);
         mpSceneBlock->setBuffer(kMaterialsBufferName, mpMaterialsBuffer);
         mpSceneBlock->setBuffer(kIndexBufferName, mpVao->getIndexBuffer());
         mpSceneBlock->setBuffer(kVertexBufferName, mpVao->getVertexBuffer(Scene::kStaticDataBufferIndex));
+        mpSceneBlock->setBuffer(kCurveVertexBufferName, mpCurveVertexBuffer);
 
         if (mpLightProbe)
         {
@@ -274,6 +297,11 @@ namespace Falcor
 
         mSceneBB = instanceBBs.front();
         for (const BoundingBox& bb : instanceBBs)
+        {
+            mSceneBB = BoundingBox::fromUnion(mSceneBB, bb);
+        }
+
+        for (const BoundingBox& bb : mCurvePatchBBs)
         {
             mSceneBB = BoundingBox::fromUnion(mSceneBB, bb);
         }
@@ -780,6 +808,56 @@ namespace Falcor
 
             mHasSkinnedMesh |= blas.hasSkinnedMesh;
         }
+
+
+        // add curves (bezier patches)
+        // we assume that all curves belong to one blas
+        std::vector<uint32_t> curveList;
+
+        for (uint32_t curveId = 0; curveId < (uint32_t)mCurveDesc.size(); curveId++)
+        {
+            curveList.push_back(curveId);
+        }
+
+        mCurveBlasData.clear();
+        mCurveBlasData.push_back(curveList);
+
+        int globalPatchId = 0;
+        ResourceBindFlags vbBindFlags = ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess;
+
+        std::vector<D3D12_RAYTRACING_AABB> aabbs;
+
+        for (uint32_t curveId = 0; curveId < (uint32_t)mCurveDesc.size(); curveId++)
+        {
+            int numPatches = mCurveDesc[curveId].vertexCount / 4;
+            // fill CPU AABB array
+            for (uint32_t patchId = 0; patchId < (uint32_t)numPatches; patchId++)
+            {
+                D3D12_RAYTRACING_AABB aabb;
+                aabb.MinX = mCurvePatchBBs[globalPatchId].getMinPos().x;
+                aabb.MinY = mCurvePatchBBs[globalPatchId].getMinPos().y;
+                aabb.MinZ = mCurvePatchBBs[globalPatchId].getMinPos().z;
+                aabb.MaxX = mCurvePatchBBs[globalPatchId].getMaxPos().x;
+                aabb.MaxY = mCurvePatchBBs[globalPatchId].getMaxPos().y;
+                aabb.MaxZ = mCurvePatchBBs[globalPatchId].getMaxPos().z;
+                aabbs.push_back(aabb);
+                globalPatchId++;
+            }
+        }
+
+        mpCurvePatchAABBBuffer = Buffer::create(aabbs.size() * sizeof(D3D12_RAYTRACING_AABB), vbBindFlags, Buffer::CpuAccess::Write, aabbs.data());
+
+        mCurveBlasData[0].geomDescs.resize((uint32_t)mCurveDesc.size());
+
+        for (uint32_t curveId = 0; curveId < (uint32_t)mCurveDesc.size(); curveId++)
+        {
+            D3D12_RAYTRACING_GEOMETRY_DESC& desc = mCurveBlasData[0].geomDescs[curveId];
+            int numPatches = mCurveDesc[curveId].vertexCount / 4;
+            desc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_PROCEDURAL_PRIMITIVE_AABBS;
+            desc.AABBs.AABBCount = numPatches;
+            desc.AABBs.AABBs.StartAddress = mpCurvePatchAABBBuffer->getGpuAddress() + mCurveDesc[curveId].vbOffset / 4 * 24;
+            desc.AABBs.AABBs.StrideInBytes = 24;
+        }
     }
 
     void Scene::buildBlas(RenderContext* pContext)
@@ -858,6 +936,66 @@ namespace Falcor
             else blas.updateMode = mBlasUpdateMode;
         }
 
+        // For each curve BLAS
+        for (uint32_t i = 0; i < (uint32_t)mCurveBlasData.size(); i++)
+        {
+            auto& blas = mCurveBlasData[i];
+
+            // Setup build parameters and get prebuild info
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+            inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+            inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            inputs.NumDescs = (uint32_t)blas.geomDescs.size();
+            inputs.pGeometryDescs = blas.geomDescs.data();
+            inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+
+            // Determine if this BLAS is, or will be refit, and add necessary flags
+            if (mBlasUpdateMode == UpdateMode::Refit)
+            {
+                inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE; // Subsequent updates need this flag too
+
+                // Refit if BLAS exists, and it was previously created with ALLOW_UPDATE
+                if (blas.pBlas != nullptr && blas.updateMode == UpdateMode::Refit) inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+            }
+
+            // Allocate scratch and BLAS buffers on the first build
+            if (blas.pBlas == nullptr)
+            {
+                GET_COM_INTERFACE(gpDevice->getApiHandle(), ID3D12Device5, pDevice5);
+                pDevice5->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &blas.prebuildInfo);
+
+                // #SCENE This isn't guaranteed according to the spec, and the scratch buffer being stored should be sized differently depending on update mode
+                assert(blas.prebuildInfo.UpdateScratchDataSizeInBytes <= blas.prebuildInfo.ScratchDataSizeInBytes);
+
+                blas.pScratchBuffer = Buffer::create(blas.prebuildInfo.ScratchDataSizeInBytes, Buffer::BindFlags::UnorderedAccess, Buffer::CpuAccess::None);
+                blas.pBlas = Buffer::create(blas.prebuildInfo.ResultDataMaxSizeInBytes, Buffer::BindFlags::AccelerationStructure, Buffer::CpuAccess::None);
+            }
+            // For any rebuild and refits, just add a barrier
+            else
+            {
+                assert(blas.pScratchBuffer != nullptr);
+                pContext->uavBarrier(blas.pBlas.get());
+                pContext->uavBarrier(blas.pScratchBuffer.get());
+            }
+
+            // Build BLAS
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
+            asDesc.Inputs = inputs;
+            asDesc.ScratchAccelerationStructureData = blas.pScratchBuffer->getGpuAddress();
+            asDesc.DestAccelerationStructureData = blas.pBlas->getGpuAddress();
+
+            // Set buffer address to update in place if this is a refit
+            if ((inputs.Flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE) > 0) asDesc.SourceAccelerationStructureData = asDesc.DestAccelerationStructureData;
+
+            GET_COM_INTERFACE(pContext->getLowLevelData()->getCommandList(), ID3D12GraphicsCommandList4, pList4);
+            pList4->BuildRaytracingAccelerationStructure(&asDesc, 0, nullptr);
+
+            // Insert a UAV barrier
+            pContext->uavBarrier(blas.pBlas.get());
+
+            blas.pScratchBuffer.reset(); // Release 
+        }
+
         updateAsToInstanceDataMapping();
     }
 
@@ -905,6 +1043,26 @@ namespace Falcor
                     std::memcpy(desc.Transform, &transform4x4, sizeof(desc.Transform));
                     instanceDescs.push_back(desc);
                 }
+            }
+        }
+
+        for (uint32_t i = 0; i < (uint32_t)mCurveBlasData.size(); i++)
+        {
+            auto& curveList = mCurveBlasData[i].curveList;
+            D3D12_RAYTRACING_INSTANCE_DESC desc = {};
+            desc.AccelerationStructure = mCurveBlasData[i].pBlas->getGpuAddress();
+            desc.InstanceMask = 0xFF;
+            desc.InstanceContributionToHitGroupIndex = perMeshHitEntry ? instanceContributionToHitGroupIndex : 0;
+            instanceContributionToHitGroupIndex += rayCount * (uint32_t)curveList.size();
+
+            // TODO: consider curve instancing
+            {
+                desc.InstanceID = instanceId;
+                instanceId += (uint32_t)curveList.size();
+                // Any instances of the mesh will get you the correct matrix, so just pick the first mesh then the first instance.
+                mat4 transform4x4(1); // currently not supporting transformation matrix for curves
+                std::memcpy(desc.Transform, &transform4x4, sizeof(desc.Transform));
+                instanceDescs.push_back(desc);
             }
         }
     }
@@ -1053,6 +1211,34 @@ namespace Falcor
             {
                 geometryIndex = 0;
                 blasIndex++;
+            }
+        }
+
+        auto curveCount = getCurveCount();
+        uint32_t descCurveHitCount = pVars->getDescCurveHitGroupCount();
+
+        uint32_t curveBlasIndex = 0;
+        uint32_t curveInBlasIndex = 0;
+        for (uint32_t i = 0; i < curveCount; i++)
+        {
+            for (uint32_t hit = 0; hit < descCurveHitCount; hit++)
+            {
+                auto pHitVars = pVars->getCurveHitVars(hit, i);
+                auto var = pHitVars->findMember(0).findMember("geometryIndex");
+                if (var.isValid())
+                {
+                    var = curveInBlasIndex;
+                }
+            }
+
+            curveInBlasIndex++;
+
+            // If at the end of this BLAS, reset counters and start checking next BLAS
+            uint32_t curveCountInBlas = (uint32_t)mCurveBlasData[curveBlasIndex].curveList.size();
+            if (curveInBlasIndex == curveCountInBlas)
+            {
+                curveInBlasIndex = 0;
+                curveBlasIndex++;
             }
         }
     }

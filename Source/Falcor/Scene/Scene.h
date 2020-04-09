@@ -81,8 +81,10 @@ namespace Falcor
         using LightList = std::vector<Light::SharedPtr>;
         static const uint32_t kMaxBonesPerVertex = 4;
         static const FileDialogFilterVec kFileExtensionFilters;
+        static const FileDialogFilterVec kCurveFileExtensionFilters;
 
         static SharedPtr create(const std::string& filename);
+        static SharedPtr createCurve(const std::string& filename, const std::string& meshSceneName = "");
 
         // #SCENE: we should get rid of this. We can't right now because we can't create a structured-buffer of materials (MaterialData contains textures)
         Shader::DefineList getSceneDefines() const;
@@ -185,9 +187,17 @@ namespace Falcor
         */
         uint32_t getMeshCount() const { return (uint32_t)mMeshDesc.size(); }
 
+        /** Get the number of curves
+        */
+        uint32_t getCurveCount() const { return (uint32_t)mCurveDesc.size(); }
+
         /** Get a mesh desc
         */
         const MeshDesc& getMesh(uint32_t meshID) const { return mMeshDesc[meshID]; }
+
+        /** Get a curve desc
+        */
+        const CurveDesc& getCurve(uint32_t curveID) const { return mCurveDesc[curveID]; }
 
         /** Get the number of mesh instances
         */
@@ -442,6 +452,9 @@ namespace Falcor
             uint32_t count = 0;
         } mDrawClockwiseMeshes, mDrawCounterClockwiseMeshes;
 
+        std::vector<CurveVertexData> mCPUCurveVertexBuffer;
+        Buffer::SharedPtr mpCurveVertexBuffer;
+
         static const uint32_t kInvalidNode = -1;
 
         struct Node
@@ -456,6 +469,7 @@ namespace Falcor
 
         // #SCENE We don't need those vectors on the host
         std::vector<MeshDesc> mMeshDesc;                    ///< Copy of GPU buffer (mpMeshes)
+        std::vector<CurveDesc> mCurveDesc;                    ///< Copy of GPU buffer (mpCurves)
         std::vector<MeshInstanceData> mMeshInstanceData;    ///< Copy of GPU buffer (mpMeshInstances)
         std::vector<Node> mSceneGraph;                      ///< For each index i, the array element indicates the parent node. Indices are in relation to mLocalToWorldMatrices
 
@@ -467,6 +481,7 @@ namespace Falcor
 
         // Scene Metadata (CPU Only)
         std::vector<BoundingBox> mMeshBBs;                          ///< Bounding boxes for meshes (not instances)
+        std::vector<BoundingBox> mCurvePatchBBs;                    ///< Bounding boxes for curve patches
         std::vector<std::vector<uint32_t>> mMeshIdToInstanceIds;    ///< Mapping of what instances belong to which mesh
         BoundingBox mSceneBB;                                       ///< Bounding boxes of the entire scene
         std::vector<bool> mMeshHasDynamicData;                      ///< Whether a Mesh has dynamic data, meaning it is skinned
@@ -474,10 +489,14 @@ namespace Falcor
 
         // Resources
         Buffer::SharedPtr mpMeshesBuffer;
+        Buffer::SharedPtr mpCurvesBuffer;
         Buffer::SharedPtr mpMeshInstancesBuffer;
         Buffer::SharedPtr mpMaterialsBuffer;
         Buffer::SharedPtr mpLightsBuffer;
         ParameterBlock::SharedPtr mpSceneBlock;
+
+        // auxiliary
+        Buffer::SharedPtr mpCurvePatchAABBBuffer;
 
         // Camera
         CameraControllerType mCamCtrlType = CameraControllerType::FirstPerson;
@@ -533,8 +552,22 @@ namespace Falcor
             UpdateMode updateMode = UpdateMode::Refit;  ///< Update mode this BLAS was created with.
         };
 
-        std::vector<BlasData> mBlasData;    ///< All data related to the scene's BLASes
+        std::vector<BlasData> mBlasData;    ///< All data related to the scene's BLASes (except curves)
         bool mHasSkinnedMesh = false;       ///< Whether the scene has a skinned mesh at all.
+
+        struct CurveBlasData
+        {
+            CurveBlasData(const std::vector<uint32_t>& curveList) : curveList(curveList) {}
+            Buffer::SharedPtr pBlas;
+            Buffer::SharedPtr pScratchBuffer;
+
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
+            std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomDescs;
+            std::vector<uint32_t> curveList;
+            UpdateMode updateMode = UpdateMode::Refit;  ///< Update mode this BLAS was created with.
+        };
+
+        std::vector<CurveBlasData> mCurveBlasData;    ///< All data related to the scene's BLASes for curves
 
         Buffer::SharedPtr mpAsToInstanceMapping;            ///< Lookup table from [InstanceID() + GeometryIndex()] to mMeshInstanceData index
         std::string mFilename;

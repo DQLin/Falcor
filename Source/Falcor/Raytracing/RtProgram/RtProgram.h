@@ -60,6 +60,7 @@ namespace Falcor
             std::vector<GroupInfo> mRayGenEntryPoints;
             std::vector<GroupInfo> mMissEntryPoints;
             std::vector<GroupInfo> mHitGroups;
+            std::vector<GroupInfo> mCurveHitGroups;
             uint32_t mMaxTraceRecursionDepth = 1;
         };
 
@@ -74,6 +75,7 @@ namespace Falcor
             Desc& addRayGen(const std::string& raygen);
             Desc& addMiss(uint32_t missIndex, const std::string& miss);
             Desc& addHitGroup(uint32_t hitIndex, const std::string& closestHit, const std::string& anyHit = "", const std::string& intersection = "");
+            Desc& addCurveHitGroup(uint32_t hitIndex, const std::string& closestHit, const std::string& anyHit = "", const std::string& intersection = "");
             Desc& addDefine(const std::string& define, const std::string& value);
             Desc& addDefines(const DefineList& defines);
 
@@ -114,10 +116,14 @@ namespace Falcor
         uint32_t getHitProgramCount() const { return (uint32_t) mDescExtra.mHitGroups.size(); }
         uint32_t getHitIndex(uint32_t index) const { return mDescExtra.mHitGroups[index].groupIndex; }
 
+        // Curve Hit
+        uint32_t getCurveHitProgramCount() const { return (uint32_t)mDescExtra.mCurveHitGroups.size(); }
+        uint32_t getCurveHitIndex(uint32_t index) const { return mDescExtra.mCurveHitGroups[index].groupIndex; }
+
         // Miss
         uint32_t getMissProgramCount() const { return (uint32_t) mDescExtra.mMissEntryPoints.size(); }
         uint32_t getMissIndex(uint32_t index) const { return mDescExtra.mMissEntryPoints[index].groupIndex; }
-
+        
         /** Set the scene
         */
         void setScene(Scene::ConstSharedPtrRef pScene);

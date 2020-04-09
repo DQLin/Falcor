@@ -166,6 +166,7 @@ namespace Falcor
                 intersectionShader(pIntersectionBlob, intersectionExportName),
                 exportName(name)
             {
+                if (pIntersectionBlob) desc.Type = D3D12_HIT_GROUP_TYPE_PROCEDURAL_PRIMITIVE;
                 desc.IntersectionShaderImport = pIntersectionBlob ? intersectionShader.exportName.c_str() : nullptr;
                 desc.AnyHitShaderImport = pAhsBlob ? anyHitShader.exportName.c_str() : nullptr;
                 desc.ClosestHitShaderImport = pChsBlob ? closestHitShader.exportName.c_str() : nullptr;

@@ -91,7 +91,6 @@ namespace Falcor
             logError("already have a hit group at that index");
         }
 
-        auto groupIndex = int32_t(mBaseDesc.mGroups.size());
         mBaseDesc.beginEntryPointGroup();
         if(closestHit.length())
         {
@@ -108,6 +107,36 @@ namespace Falcor
 
         DescExtra::GroupInfo info = { mBaseDesc.mActiveGroup };
         mHitGroups[hitIndex] = info;
+        return *this;
+    }
+
+	RtProgram::Desc& RtProgram::Desc::addCurveHitGroup(uint32_t hitIndex, const std::string& closestHit, const std::string& anyHit, const std::string& intersection)
+	{
+        if (hitIndex >= mCurveHitGroups.size())
+        {
+            mCurveHitGroups.resize(hitIndex + 1);
+        }
+        else if (mCurveHitGroups[hitIndex].groupIndex >= 0)
+        {
+            logError("already have a curve hit group at that index");
+        }
+
+        mBaseDesc.beginEntryPointGroup();
+        if (closestHit.length())
+        {
+            mBaseDesc.entryPoint(ShaderType::ClosestHit, closestHit);
+        }
+        if (anyHit.length())
+        {
+            mBaseDesc.entryPoint(ShaderType::AnyHit, anyHit);
+        }
+        if (intersection.length())
+        {
+            mBaseDesc.entryPoint(ShaderType::Intersection, intersection);
+        }
+
+        DescExtra::GroupInfo info = { mBaseDesc.mActiveGroup };
+        mCurveHitGroups[hitIndex] = info;
         return *this;
     }
 

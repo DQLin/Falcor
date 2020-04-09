@@ -168,6 +168,9 @@ namespace Falcor
         /** Check if a camera exists
         */
         bool hasCamera() const { return mCamera.pObject != nullptr; }
+
+        void loadKnitCCPFile(const std::string& filename, float scale = 1.f, bool yz = true);
+
     private:
         struct InternalNode : Node
         {
@@ -203,6 +206,21 @@ namespace Falcor
         using SceneGraph = std::vector<InternalNode>;
         using MeshList = std::vector<MeshSpec>;
 
+        struct CurveSpec
+        {
+            CurveSpec() = default;
+            Vao::Topology topology;
+            uint32_t materialId = 0;
+            uint32_t vertexOffset = 0;
+            uint32_t vertexCount = 0;
+        };
+
+        struct CurveData
+        {
+            std::vector<CurveVertexData> staticData;
+        };
+        using CurveList = std::vector<CurveSpec>;
+
         bool mDirty = true;
         Scene::SharedPtr mpScene;
 
@@ -212,6 +230,9 @@ namespace Falcor
         MeshList mMeshes;
         std::vector<Material::SharedPtr> mMaterials;
         std::unordered_map<const Material*, uint32_t> mMaterialToId;
+
+        CurveList mCurves;
+        CurveData mCurveData;
 
         Scene::AnimatedObject<Camera> mCamera;
         std::vector<Scene::AnimatedObject<Light>> mLights;
@@ -223,9 +244,12 @@ namespace Falcor
         Vao::SharedPtr createVao(uint16_t drawCount);
 
         uint32_t createMeshData(Scene* pScene);
+        uint32_t createCurveData(Scene* pScene);
         void createGlobalMatricesBuffer(Scene* pScene);
         void calculateMeshBoundingBoxes(Scene* pScene);
+        void calculateCurvePatchBoundingBoxes(Scene* pScene);
         void createAnimationController(Scene* pScene);
+        void GenerateBezierPatchesFromKnitData(const std::vector<std::vector<vec3>>& knitData);
         std::string mFilename;
     };
 
